@@ -1,0 +1,78 @@
+stages:
+  - ecr_data_preparation_image_push
+  - dev_provisioning
+  - cloudwatch_logs
+before_script:
+  - export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+  - export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+  - export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+
+
+ecr_data_preparation_image_push_SF_ELT_POC:
+  image: nexus.pitneycloud.com:8443/fusion-platform/awscli-docker:latest
+  stage: ecr_data_preparation_image_push
+  tags:
+    - fusion-docker
+  script:
+    - python3 SF_ELT_POC/secretReplacement.py
+    - cp -r ./Helper ./SF_ELT_POC/
+    - cd ./SF_ELT_POC/
+    - ls
+    - cd ../
+    - $(aws ecr get-login --no-include-email --region ${AWS_DEFAULT_REGION})
+    - aws ecr describe-repositories --region ${AWS_DEFAULT_REGION} --repository-names ${project_name} || aws ecr create-repository --region ${AWS_DEFAULT_REGION} --repository-name ${project_name}
+    - aws ecr describe-repositories --region ${AWS_DEFAULT_REGION} --repository-names ${project_name} > output.json
+    - REPOSITORY_URL=$(cat output.json | jq -r .repositories[].repositoryUri)
+    - docker build --build-arg ACCESS_KEY_ID_VAR=$AWS_ACCESS_KEY_ID --build-arg SECRET_ACCESS_KEY_VAR=$AWS_SECRET_ACCESS_KEY -t ${REPOSITORY_URL}:latest ./SF_ELT_POC
+    - docker push  ${REPOSITORY_URL}:latest
+    - docker rmi  ${REPOSITORY_URL}:latest # Removing docker image
+    - echo -e "${REPOSITORY_URL}:latest" >> image_url.txt
+  artifacts:
+    paths:
+      - ./image_url.txt
+    expire_in: 1 week
+  allow_failure: false
+  environment:
+    name: $CI_COMMIT_REF_NAME
+  when: manual
+
+
+
+display_cloudwatch_logs_SF_ELT_POC:
+  image: nexus.pitneycloud.com:8443/fusion-platform/awscli-docker:latest
+  tags:
+    - fusion-docker
+  stage: cloudwatch_logs
+  script:
+    - aws logs describe-log-streams --log-group-name {log_group_name} --order-by LastEventTime --descending --max-items 1 --region us-west-2 > sf-elt-poc.json
+    - export logStreamName=$(cat sf-elt-poc.json | jq -r .logStreams[].logStreamName)
+    - aws logs get-log-events --log-group-name log_group_name --log-stream-name ${logStreamName} > logs.txt
+    - grep 'message' logs.txt
+  environment:
+    name: $CI_COMMIT_REF_NAME
+  when: manual
+
+
+infrastructure_dev_provisioning_SF_ELT_POC:
+  image: nexus.pitneycloud.com:8443/fusion-platform/awscli-docker:latest
+  tags:
+    - fusion-docker
+  stage: dev_provisioning
+  script:
+    - repourl=${project_name_sf_elt_poc}
+    - min=$(date +"$(( `date +%M`+5))") && hour=$(date +"%H")
+    - if [ $min -ge 60 ]; then min=$(echo $min-60 |bc) && hour=$(date +"$(( `date +%H`+1))") && if [ $hour -ge 24 ]; then export hour=00 ; else hour=$hour ; fi ; else min=$min; fi
+    - export cron="cron(${min} ${hour} * * ? *)"
+    - python3 SF_ELT_POC/secretReplacement.py
+    - cd SF_ELT_POC/infra/${env}
+    - export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+    - export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+    - export TF_VAR_CLOUD_REGION=${AWS_DEFAULT_REGION}
+    - terraform init -backend-config="bucket=${BUCKET_NAME}" -backend-config="key=terraform/bishipping/${project_name_sf_elt_poc}/terraform.tfstate" -backend-config="region=${TF_VAR_CLOUD_REGION}"
+    - terraform plan -out "planfile"
+    - terraform apply -input=false "planfile"
+  environment:
+    name: $CI_COMMIT_REF_NAME
+
+  when: manual
+

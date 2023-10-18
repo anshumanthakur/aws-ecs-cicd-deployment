@@ -1,0 +1,9 @@
+boto3
+pandas==1.1.5
+snowflake-connector-python==2.3.9
+sqlalchemy
+snowflake.sqlalchemy
+snowflake
+openpyxl
+configparser
+pretty-html-table

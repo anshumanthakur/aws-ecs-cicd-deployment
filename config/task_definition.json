@@ -1,0 +1,14 @@
+[
+   {
+      "name":"$$projectname$$",
+      "image":"{ECR-image-uri}",
+      "essential":true,
+      "logConfiguration":{
+         "logDriver":"awslogs",
+         "options":{
+            "awslogs-group":"$$projectname$$_containerlogs",
+            "awslogs-region":"$$region$$",
+         }
+      }
+   }
+]
